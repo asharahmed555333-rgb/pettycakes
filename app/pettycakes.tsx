@@ -1,6 +1,9 @@
 'use client';
 
-import { FormEvent, useEffect, useState, type CSSProperties } from 'react';
+import { FormEvent, useEffect, useRef, useState } from 'react';
+import { gsap } from 'gsap';
+import { ScrollTrigger } from 'gsap/ScrollTrigger';
+import { useGSAP } from '@gsap/react';
 import {
   AlertCircle,
   CakeSlice,
@@ -16,6 +19,10 @@ import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import { Textarea } from '@/components/ui/textarea';
 import { CURRENCY, cakes, type CakeId } from '@/lib/cakes';
 
+if (typeof window !== 'undefined') {
+  gsap.registerPlugin(ScrollTrigger, useGSAP);
+}
+
 type FormStatus = { type: 'idle' | 'loading' | 'success' | 'error'; message: string };
 
 function localDateString() {
@@ -27,8 +34,72 @@ function localDateString() {
 export default function PettyCakes() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [selectedCake, setSelectedCake] = useState<CakeId>('chocolate-fudge');
+  const [activeCakeIndex, setActiveCakeIndex] = useState(0);
   const [status, setStatus] = useState<FormStatus>({ type: 'idle', message: '' });
+  const cakesSectionRef = useRef<HTMLElement>(null);
+  const cakesTrackRef = useRef<HTMLDivElement>(null);
+  const activeCakeIndexRef = useRef(0);
   const minDate = localDateString();
+  const activeCake = cakes[activeCakeIndex];
+
+  useGSAP(() => {
+    const section = cakesSectionRef.current;
+    const track = cakesTrackRef.current;
+    if (!section || !track) return;
+
+    const viewport = section.querySelector<HTMLElement>('.cake-viewport');
+    const cards = gsap.utils.toArray<HTMLElement>('.menu-cake-card', section);
+    if (!viewport || cards.length === 0) return;
+
+    const setFocusedCake = (index: number) => {
+      const nextIndex = Math.max(0, Math.min(cards.length - 1, index));
+      if (activeCakeIndexRef.current !== nextIndex) {
+        activeCakeIndexRef.current = nextIndex;
+        setActiveCakeIndex(nextIndex);
+      }
+    };
+
+    const getCenteredX = (card: HTMLElement) => (
+      (viewport.clientWidth / 2) - (card.offsetLeft + card.offsetWidth / 2)
+    );
+
+    const media = gsap.matchMedia();
+    media.add('(prefers-reduced-motion: no-preference)', () => {
+      const horizontalTween = gsap.fromTo(
+        track,
+        { x: () => getCenteredX(cards[0]) },
+        {
+          x: () => getCenteredX(cards[cards.length - 1]),
+          ease: 'none',
+          scrollTrigger: {
+            id: 'pettycakes-menu',
+            trigger: section,
+            start: 'top top',
+            end: () => {
+              const travel = Math.abs(getCenteredX(cards[cards.length - 1]) - getCenteredX(cards[0]));
+              return `+=${Math.max(window.innerHeight * 3.6, travel * 1.7)}`;
+            },
+            pin: true,
+            pinSpacing: true,
+            scrub: 0.65,
+            anticipatePin: 1,
+            invalidateOnRefresh: true,
+            onUpdate: (self) => setFocusedCake(Math.round(self.progress * (cards.length - 1))),
+          },
+        },
+      );
+
+      requestAnimationFrame(() => ScrollTrigger.refresh());
+      return () => horizontalTween.kill();
+    });
+
+    media.add('(prefers-reduced-motion: reduce)', () => {
+      gsap.set(track, { clearProps: 'transform' });
+      setFocusedCake(0);
+    });
+
+    return () => media.revert();
+  }, { scope: cakesSectionRef });
 
   useEffect(() => {
     const elements = document.querySelectorAll<HTMLElement>('[data-reveal]');
@@ -52,6 +123,11 @@ export default function PettyCakes() {
 
   function closeMenu() {
     setMenuOpen(false);
+  }
+
+  function focusCake(index: number) {
+    activeCakeIndexRef.current = index;
+    setActiveCakeIndex(index);
   }
 
   function orderCake(cakeId: CakeId) {
@@ -150,27 +226,40 @@ export default function PettyCakes() {
         </div>
       </section>
 
-      <section className="cakes-section" id="cakes">
-        <div className="section-shell">
-          <div className="section-heading" data-reveal>
-            <div><p className="eyebrow">Our popular cakes</p><h2>Pick your favourite.</h2></div>
-            <p>Each price is a sample starting price and can be changed easily in the cake settings.</p>
+      <section className="cakes-section" id="cakes" ref={cakesSectionRef} aria-labelledby="cakes-heading">
+        <div className="cakes-pin section-shell">
+          <div className="cakes-details" aria-live="polite" aria-atomic="true">
+            <p className="eyebrow">The Menu</p>
+            <p className="cake-count"><span>{String(activeCakeIndex + 1).padStart(2, '0')}</span> / {String(cakes.length).padStart(2, '0')}</p>
+            <div className="active-cake-copy" key={activeCake.id}>
+              <h2 id="cakes-heading">{activeCake.name}</h2>
+              <p className="active-cake-price">From {CURRENCY}{activeCake.price} <span>sample price</span></p>
+              <p>{activeCake.description}</p>
+            </div>
+            <Button type="button" className="active-cake-order" onClick={() => orderCake(activeCake.id)}>
+              Order {activeCake.name}
+            </Button>
+            <p className="menu-scroll-hint">Scroll to discover every cake</p>
           </div>
 
-          <div className="cake-grid">
-            {cakes.map((cake, index) => (
-              <article className="cake-card" key={cake.id} data-reveal style={{ '--delay': `${index * 55}ms` } as CSSProperties}>
-                <div className="cake-image-wrap"><img src={cake.image} alt={cake.alt} loading="lazy" /></div>
-                <div className="cake-card-body">
-                  <div className="cake-card-title"><h3>{cake.name}</h3><p>{CURRENCY}{cake.price}</p></div>
-                  <span className="sample-price">Sample starting price</span>
-                  <p>{cake.description}</p>
-                  <Button type="button" variant="outline" className="cake-order-button" onClick={() => orderCake(cake.id)}>
-                    Order This Cake
-                  </Button>
-                </div>
-              </article>
-            ))}
+          <div className="cake-viewport" aria-label="PettyCakes menu">
+            <div className="cake-track" ref={cakesTrackRef}>
+              {cakes.map((cake, index) => (
+                <button
+                  className={`menu-cake-card ${index === activeCakeIndex ? 'is-active' : ''}`}
+                  key={cake.id}
+                  type="button"
+                  aria-label={`View ${cake.name} details`}
+                  aria-pressed={index === activeCakeIndex}
+                  onClick={() => focusCake(index)}
+                  onFocus={() => focusCake(index)}
+                  onMouseEnter={() => focusCake(index)}
+                >
+                  <img src={cake.image} alt={cake.alt} loading={index < 2 ? 'eager' : 'lazy'} />
+                  <span><strong>{cake.name}</strong><small>{CURRENCY}{cake.price}</small></span>
+                </button>
+              ))}
+            </div>
           </div>
         </div>
       </section>
